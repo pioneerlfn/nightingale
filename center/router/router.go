@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ccfos/nightingale/v6/aiagent/llm"
 	"github.com/ccfos/nightingale/v6/alert/aconf"
 	"github.com/ccfos/nightingale/v6/center/cconf"
 	"github.com/ccfos/nightingale/v6/center/cstats"
@@ -54,6 +55,8 @@ type Router struct {
 	LogDir            string
 
 	HeartbeatHook         HeartbeatHookFunc
+	msgStateManager       *MessageStateManager
+	llmClientCache        *llm.ClientCache
 	TargetDeleteHook      models.TargetDeleteHookFunc
 	TargetBgidChangeCheck TargetBgidChangeCheckFunc
 	AlertRuleModifyHook   AlertRuleModifyHookFunc
@@ -86,9 +89,11 @@ func New(httpConfig httpx.Config, center cconf.Center, alert aconf.Alert, ibex c
 		Ctx:                   ctx,
 		LogDir:                logDir,
 		HeartbeatHook:         func(ident string) map[string]interface{} { return nil },
+		AlertRuleModifyHook:   func(ar *models.AlertRule) {},
+		msgStateManager:       NewMessageStateManager(),
+		llmClientCache:        llm.NewClientCache(),
 		TargetDeleteHook:      func(tx *gorm.DB, idents []string, force bool) error { return nil },
 		TargetBgidChangeCheck: func(idents []string, action string, bgids []int64) error { return nil },
-		AlertRuleModifyHook:   func(ar *models.AlertRule) {},
 	}
 }
 
@@ -526,6 +531,52 @@ func (rt *Router) Config(r *gin.Engine) {
 		pages.PUT("/config", rt.auth(), rt.admin(), rt.configPutByKey)
 		pages.GET("/site-info", rt.siteInfo)
 
+		// AI Config management
+		pages.GET("/ai-agents", rt.auth(), rt.admin(), rt.aiAgentGets)
+		pages.GET("/ai-agent/:id", rt.auth(), rt.admin(), rt.aiAgentGet)
+		pages.POST("/ai-agents", rt.auth(), rt.admin(), rt.aiAgentAdd)
+		pages.PUT("/ai-agent/:id", rt.auth(), rt.admin(), rt.aiAgentPut)
+		pages.DELETE("/ai-agent/:id", rt.auth(), rt.admin(), rt.aiAgentDel)
+
+		pages.GET("/ai-llm-configs", rt.auth(), rt.admin(), rt.aiLLMConfigGets)
+		pages.GET("/ai-llm-config/:id", rt.auth(), rt.admin(), rt.aiLLMConfigGet)
+		pages.POST("/ai-llm-configs", rt.auth(), rt.admin(), rt.aiLLMConfigAdd)
+		pages.PUT("/ai-llm-config/:id", rt.auth(), rt.admin(), rt.aiLLMConfigPut)
+		pages.DELETE("/ai-llm-config/:id", rt.auth(), rt.admin(), rt.aiLLMConfigDel)
+		pages.POST("/ai-llm-config/test", rt.auth(), rt.admin(), rt.aiLLMConfigTest)
+
+		pages.GET("/ai-skills", rt.auth(), rt.admin(), rt.aiSkillGets)
+		pages.GET("/ai-skill/:id", rt.auth(), rt.admin(), rt.aiSkillGet)
+		pages.POST("/ai-skills", rt.auth(), rt.admin(), rt.aiSkillAdd)
+		pages.PUT("/ai-skill/:id", rt.auth(), rt.admin(), rt.aiSkillPut)
+		pages.DELETE("/ai-skill/:id", rt.auth(), rt.admin(), rt.aiSkillDel)
+		pages.POST("/ai-skills/import", rt.auth(), rt.admin(), rt.aiSkillImport)
+		pages.PUT("/ai-skill/:id/import", rt.auth(), rt.admin(), rt.aiSkillImportUpdate)
+		pages.GET("/ai-skill-file/:fileId", rt.auth(), rt.admin(), rt.aiSkillFileGet)
+		pages.DELETE("/ai-skill-file/:fileId", rt.auth(), rt.admin(), rt.aiSkillFileDel)
+
+		pages.GET("/mcp-servers", rt.auth(), rt.admin(), rt.mcpServerGets)
+		pages.GET("/mcp-server/:id", rt.auth(), rt.admin(), rt.mcpServerGet)
+		pages.POST("/mcp-servers", rt.auth(), rt.admin(), rt.mcpServerAdd)
+		pages.PUT("/mcp-server/:id", rt.auth(), rt.admin(), rt.mcpServerPut)
+		pages.DELETE("/mcp-server/:id", rt.auth(), rt.admin(), rt.mcpServerDel)
+		pages.POST("/mcp-server/test", rt.auth(), rt.admin(), rt.mcpServerTest)
+		pages.GET("/mcp-server/:id/tools", rt.auth(), rt.admin(), rt.mcpServerTools)
+
+		// AI Assistant Chat
+		pages.POST("/assistant/chat/new", rt.auth(), rt.user(), rt.assistantChatNew)
+		pages.GET("/assistant/chat/history", rt.auth(), rt.user(), rt.assistantChatHistory)
+		pages.DELETE("/assistant/chat/:chatId", rt.auth(), rt.user(), rt.assistantChatDel)
+
+		// AI Assistant Message
+		pages.POST("/assistant/message/new", rt.auth(), rt.user(), rt.assistantMessageNew)
+		pages.POST("/assistant/message/detail", rt.auth(), rt.user(), rt.assistantMessageDetail)
+		pages.POST("/assistant/message/history", rt.auth(), rt.user(), rt.assistantMessageHistory)
+		pages.POST("/assistant/message/cancel", rt.auth(), rt.user(), rt.assistantMessageCancel)
+
+		// SSE Stream
+		pages.POST("/stream", rt.auth(), rt.user(), rt.assistantStream)
+
 		// source token 相关路由
 		pages.POST("/source-token", rt.auth(), rt.user(), rt.sourceTokenAdd)
 
@@ -731,6 +782,22 @@ func (rt *Router) Config(r *gin.Engine) {
 
 			service.GET("/builtin-components", rt.builtinComponentsGets)
 			service.GET("/builtin-payloads", rt.builtinPayloadsGets)
+
+			service.GET("/ai-skills", rt.aiSkillGets)
+			service.GET("/ai-skill/:id", rt.aiSkillGetWithFileContents)
+			service.POST("/ai-skills", rt.aiSkillAddByService)
+			service.POST("/ai-skills/import", rt.aiSkillImportByService)
+			service.PUT("/ai-skill/:id/import", rt.aiSkillImportUpdateByService)
+
+			// AI Assistant (for external service, reuses frontend handlers via serviceUser middleware)
+			service.POST("/assistant/chat/new", rt.serviceUser(), rt.assistantChatNew)
+			service.GET("/assistant/chat/history", rt.serviceUser(), rt.assistantChatHistory)
+			service.DELETE("/assistant/chat/:chatId", rt.serviceUser(), rt.assistantChatDel)
+			service.POST("/assistant/message/new", rt.serviceUser(), rt.assistantMessageNew)
+			service.POST("/assistant/message/detail", rt.serviceUser(), rt.assistantMessageDetail)
+			service.POST("/assistant/message/history", rt.serviceUser(), rt.assistantMessageHistory)
+			service.POST("/assistant/message/cancel", rt.serviceUser(), rt.assistantMessageCancel)
+			service.POST("/assistant/stream", rt.assistantStream)
 		}
 	}
 

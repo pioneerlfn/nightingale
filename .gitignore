@@ -66,6 +66,7 @@ _test
 .cache-loader
 .payload
 queries.active
+.playwright-mcp
 
 /n9e-*
 n9e.sql
@@ -73,3 +74,4 @@ n9e.sql
 !/datasource
 
 .env.json
+/aichat-cli
