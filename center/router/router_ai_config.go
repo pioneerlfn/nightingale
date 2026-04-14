@@ -355,7 +355,7 @@ func parseSkillMarkdown(content string) (meta skillFrontmatter, instructions str
 }
 
 const (
-	maxFileCount       = 50                // max files per archive (excluding SKILL.md)
+	maxFileCount       = 200               // max files per archive (excluding SKILL.md)
 	maxTotalExtracted  = 50 * 1024 * 1024  // 50MB total extracted size
 	maxSingleFile      = 16 * 1024 * 1024  // 16MB per file (MEDIUMTEXT)
 	maxSkillInstruction = 64 * 1024        // 64KB for SKILL.md (TEXT)

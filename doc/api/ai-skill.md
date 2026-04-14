@@ -327,7 +327,7 @@ allowed-tools: Bash(git:*) Read
 | 解压后总大小 | 50MB | 防御高压缩比攻击 |
 | SKILL.md 大小 | 64KB | 对应数据库 TEXT 字段上限 |
 | 单个资源文件大小 | 16MB | 对应数据库 MEDIUMTEXT 字段上限 |
-| 资源文件数量 | 50 | 每个 Skill 最多 50 个资源文件 |
+| 资源文件数量 | 200 | 每个 Skill 最多 200 个资源文件 |
 
 ### 响应
 
